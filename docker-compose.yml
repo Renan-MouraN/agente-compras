@@ -1,0 +1,73 @@
+name: agente-compras
+
+# Sobe as quatro peças do case: Postgres, servidor MCP, backend (agente) e chat (React).
+# Variáveis vêm do arquivo .env (copie de .env.example). Só OPENROUTER_API_KEY é obrigatória.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-compras}
+      POSTGRES_USER: ${POSTGRES_USER:-compras}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-compras}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  mcp-server:
+    build: ./mcp_server
+    environment:
+      DUMMYJSON_BASE_URL: ${DUMMYJSON_BASE_URL:-https://dummyjson.com}
+      DUMMYJSON_TIMEOUT_SECONDS: ${DUMMYJSON_TIMEOUT_SECONDS:-10}
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8001
+      # Proteção contra DNS rebinding: só aceita estes valores no header Host.
+      MCP_ALLOWED_HOSTS: mcp-server:*,localhost:*,127.0.0.1:*
+    ports:
+      - "${MCP_PUBLISHED_PORT:-8001}:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-compras}:${POSTGRES_PASSWORD:-compras}@postgres:5432/${POSTGRES_DB:-compras}
+      MCP_SERVER_URL: http://mcp-server:8001/mcp
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-haiku-5.5}
+      OPENROUTER_TIMEOUT_SECONDS: ${OPENROUTER_TIMEOUT_SECONDS:-60}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-10}
+    ports:
+      - "${BACKEND_PUBLISHED_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "${FRONTEND_PUBLISHED_PORT:-3000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

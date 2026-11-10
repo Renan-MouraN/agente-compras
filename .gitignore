@@ -218,3 +218,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---- agente-compras ----
+# Segredos: nunca versionar arquivos .env reais (apenas .env.example)
+.env.*
+!.env.example
+
+# Node / Vite (frontend)
+node_modules/
+frontend/dist/
+*.local
+npm-debug.log*
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
