@@ -1,7 +1,9 @@
 // Cliente HTTP do backend. Toda falha vira um ErroApi com mensagem pronta para o chat.
 
 const BASE = '/api'
-const TIMEOUT_MS = 180_000 // o agente pode fazer várias rodadas LLM <-> ferramentas
+// Hierarquia de prazos: agente no backend (AGENT_TIMEOUT_SECONDS=120s) < este (150s) < nginx (300s).
+// Assim o backend sempre responde (com sucesso ou erro claro) antes de o navegador desistir.
+const TIMEOUT_MS = 150_000
 
 export class ErroApi extends Error {
   constructor(mensagem, codigo = 'erro') {

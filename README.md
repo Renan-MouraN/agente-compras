@@ -4,14 +4,24 @@ A pessoa descreve o que precisa num chat. Um agente (LLM via OpenRouter) consult
 [DummyJSON](https://dummyjson.com) por meio de um **servidor MCP**, escolhe os itens e o backend grava uma
 **requisição de compra** no Postgres. A resposta traz número, itens, quantidades, preços e valor total.
 
+**Em resumo:**
+- O modelo decide quais ferramentas chamar, sem fluxo fixo.
+- O backend só grava o que confere com o catálogo consultado: IDs vistos, preço do catálogo, estoque e mínimo, totais calculados com `Decimal`.
+- Falhas e lentidão de DummyJSON, MCP, LLM ou banco viram mensagens claras no chat, com prazo máximo por pedido.
+- Dependências com versões fixas, para o build ser reproduzível.
+
 ## Como rodar
 
 Pré-requisito: Docker com Docker Compose v2.
 
 ```bash
 cp .env.example .env          # preencha OPENROUTER_API_KEY
-docker compose up --build
+docker compose up --build     # na primeira vez, `docker compose up` também faz o build
 ```
+
+Os quatro serviços sobem em ordem, guiados por healthchecks: `postgres` e `mcp-server` ficam `healthy`,
+depois sobe o `backend` (`healthy`) e então o `frontend`. Confira com `docker compose ps`. Para recomeçar
+do zero, apagando o banco: `docker compose down -v`.
 
 | Serviço | URL |
 |---|---|
@@ -97,7 +107,15 @@ exibe a `mensagem`.
 | Chave OpenRouter ausente | 503 | `llm_nao_configurado` |
 | OpenRouter: chave inválida, sem créditos, rate limit, timeout | 502 / 504 | `llm_erro` / `llm_timeout` |
 | Modelo não concluiu em `AGENT_MAX_STEPS` rodadas | 502 | `agente_sem_conclusao` |
+| Pedido inteiro passou de `AGENT_TIMEOUT_SECONDS` (nada é gravado) | 504 | `agente_timeout` |
+| Banco inacessível durante o pedido | 503 | `banco_indisponivel` |
 | Pedido vazio ou longo demais | 422 | `pedido_invalido` |
+
+**Prazos alinhados.** Cada chamada externa tem seu próprio timeout: DummyJSON (10 s) e OpenRouter (60 s por
+rodada). Por cima deles há um prazo total por pedido: `AGENT_TIMEOUT_SECONDS`, de 120 s. Esse prazo fica
+abaixo do timeout do chat (150 s), que fica abaixo do timeout do nginx (300 s). Assim, o backend sempre
+responde antes de o navegador desistir. A gravação acontece só depois que o agente conclui dentro do
+prazo: se o prazo estourar, nada é gravado e o usuário recebe uma mensagem clara.
 
 **Prompt e ferramentas.** As descrições das ferramentas avisam que o catálogo está em inglês. Uma busca
 por "notebook" ou "celular" não retorna nada; com o aviso, o modelo traduz para "laptop" ou "smartphone"
@@ -110,8 +128,15 @@ modelo não faça perguntas, já que cada pedido é independente.
 - **Cliente OpenRouter:** chamadas HTTP diretas, sem framework de agentes. O ciclo tem cerca de 100 linhas e é fácil de ler e testar.
 - **MCP:** SDK oficial (`mcp` 2.3) com transporte streamable HTTP *stateless*, cada uma das quatro peças em seu próprio container. A proteção contra DNS rebinding fica ativa, com lista de hosts permitidos.
 - **Banco:** tabelas criadas com `create_all` no startup, como pede o case. Em produção eu usaria migrações (Alembic).
+- **Primeira subida do Postgres:** o healthcheck usa `pg_isready -h 127.0.0.1`, que força TCP. Na primeira inicialização do volume, a imagem sobe um servidor temporário só no socket Unix, e sem TCP o healthcheck marcaria "pronto" cedo demais. Além disso, o backend repete a criação das tabelas em erros transitórios ("the database system is starting up", conexão recusada, DNS) e falha na hora em erros permanentes (senha errada, banco inexistente), com mensagem no log.
+- **Dependências fixadas:** todas as versões Python, inclusive as transitivas, estão fixadas com `==` em `requirements*.txt`. São as versões resolvidas para Python 3.12 (a das imagens) e usadas nos testes. O frontend usa o `package-lock.json` com `npm ci`.
 - **Pedidos sem memória:** cada mensagem do chat é um pedido independente, sem histórico de conversa. Isso mantém o contrato da API simples (`{"pedido": "..."}`).
 - **Moeda:** os preços da DummyJSON estão em USD. O agente não inventa câmbio para limites em outra moeda.
+
+**Limitações conhecidas:**
+- **Lembrete ao modelo:** se o modelo responder em texto livre em vez de chamar `concluir_pedido`, o backend envia **um** lembrete. Se ele insistir, o texto é devolvido como resposta, sem gravar nada. Isso garante o formato de saída e não define quais ferramentas usar.
+- **Limites de preço e orçamento:** o backend confere esses limites com os valores que o *modelo* extrai do pedido (`preco_unitario_maximo`, `orcamento_total_maximo`). Se o modelo deixar de informar um limite que o usuário citou, essa conferência não acontece. Estoque, mínimo, existência do produto e preço são sempre conferidos.
+- **Busca limitada:** `buscar_produtos` devolve até 20 resultados, sem paginação. O campo `total_encontrado` informa quando existem mais.
 
 ## Testes
 
@@ -121,22 +146,29 @@ Nenhum teste precisa de chave de LLM nem de internet: a DummyJSON é simulada co
 # Servidor MCP: um ou mais testes por ferramenta (sucesso, vazio, timeout, 404, falha de conexão)
 docker compose run --rm --no-deps mcp-server pytest -v
 
-# Backend: validação/cálculos, ciclo do agente, API (SQLite temporário) e erros de integração
+# Backend: validação/cálculos, ciclo do agente, API (SQLite temporário), prazos,
+# retentativa do banco e erros de integração
 docker compose run --rm --no-deps backend pytest -v
 
 # Frontend: o cliente da API roda no build da imagem (npm test)
 ```
 
-Sem Docker (Python 3.12+ e Node 22+):
+Sem Docker (Node 22+ e Python 3.12 ou superior; as imagens usam 3.12 e as suítes também foram executadas em 3.14):
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r mcp_server/requirements-dev.txt -r backend/requirements-dev.txt
 (cd mcp_server && pytest)            # 10 testes
 (cd mcp_server && pytest -m live)    # opcional: contra a DummyJSON real
-(cd backend && pytest)               # 39 testes
+(cd backend && pytest)               # 61 testes (8 deles sobem o servidor MCP real)
 (cd frontend && npm ci && npm test)  # 5 testes
 ```
+
+O **teste de contrato** ([backend/tests/test_contrato_mcp.py](backend/tests/test_contrato_mcp.py)) sobe o
+servidor MCP real como subprocesso, com transporte HTTP, apontando para uma DummyJSON simulada local. Ele
+exercita o cliente MCP do backend sem dublês: descoberta das ferramentas, saída estruturada, códigos de
+erro, o agente e a API. Como depende da pasta `mcp_server/`, roda no ambiente local. Dentro do container do
+backend ele é pulado, com o motivo explícito (8 testes `skipped`).
 
 ### Simulando falhas
 
@@ -162,6 +194,7 @@ backend/app/mcp_client.py     # descoberta/execução de ferramentas MCP
 backend/app/llm.py            # cliente OpenRouter
 backend/app/main.py           # rotas FastAPI e tratamento de erros
 backend/app/models.py         # tabelas requisicoes / itens_requisicao
+backend/app/db.py             # engine, criação das tabelas e retentativa no startup
 frontend/src/App.jsx          # chat
 frontend/src/api.js           # cliente HTTP com mensagens de erro
 ```
@@ -171,6 +204,8 @@ frontend/src/api.js           # cliente HTTP com mensagens de erro
 - A chave da OpenRouter só existe no `.env`, que não é versionado (`.gitignore`). Ela é lida pelo backend e nunca vai ao frontend nem às respostas da API.
 - O Postgres não é exposto fora da rede do compose. As credenciais padrão servem só para o ambiente local.
 - Os containers Python rodam como usuário não-root.
+- A API (8000) e o servidor MCP (8001) ficam publicados no host **sem autenticação**, para facilitar os testes locais. Num ambiente real, só o frontend seria exposto, atrás de autenticação.
+- Atenção: `docker compose config`, sem `--quiet`, imprime as variáveis já resolvidas, **inclusive a chave**. Evite rodar esse comando ao compartilhar a tela.
 
 ## Uso de IA
 
@@ -179,7 +214,7 @@ defini a stack, a arquitetura e as regras (o modelo decide as ferramentas, nada 
 inventados, validação antes de salvar) e pedi a implementação em etapas: estrutura e Docker, servidor
 MCP, agente e persistência, frontend. Cada etapa foi acompanhada de testes.
 
-A IA escreveu a maior parte do código e dos testes. Antes de escrever, ela inspecionou a API real do SDK
+A IA escreveu grande parte do código e dos testes. Antes de escrever, ela inspecionou a API real do SDK
 MCP 2.x e os dados reais da DummyJSON. Também rodou o fluxo de ponta a ponta com a OpenRouter (pedido de
 exemplo, pedido impossível, termo em português, pedido fora do escopo, falhas da DummyJSON e do MCP).
 Revisei o código, as decisões e este README.

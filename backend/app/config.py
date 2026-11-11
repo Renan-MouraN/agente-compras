@@ -16,6 +16,7 @@ class Settings:
     openrouter_base_url: str
     openrouter_timeout_seconds: float
     agent_max_steps: int
+    agent_timeout_seconds: float
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -28,4 +29,7 @@ class Settings:
             openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/"),
             openrouter_timeout_seconds=float(os.getenv("OPENROUTER_TIMEOUT_SECONDS", "60")),
             agent_max_steps=int(os.getenv("AGENT_MAX_STEPS", "10")),
+            # Prazo total de um pedido (todas as rodadas LLM <-> ferramentas). Deve ficar
+            # abaixo do timeout do frontend (150s) para o backend sempre responder primeiro.
+            agent_timeout_seconds=float(os.getenv("AGENT_TIMEOUT_SECONDS", "120")),
         )

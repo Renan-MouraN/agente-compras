@@ -1,6 +1,8 @@
 """Testes da API HTTP com SQLite temporário, LLM roteirizado e catálogo falso."""
 
+import asyncio
 import dataclasses
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -98,6 +100,37 @@ def test_pedido_vazio_retorna_422_em_portugues(settings):
         resp = client.post("/requisicoes", json={"pedido": "  "})
     assert resp.status_code == 422
     assert resp.json()["erro"] == "pedido_invalido"
+
+
+class LLMLento(FakeLLM):
+    async def completar(self, messages, tools):
+        await asyncio.sleep(5)
+        return await super().completar(messages, tools)
+
+
+def test_prazo_global_do_agente_retorna_504_e_nao_grava(settings):
+    curto = dataclasses.replace(settings, agent_timeout_seconds=0.2)
+    app = create_app(curto, llm_factory=lambda _: LLMLento(_roteiro_feliz()), conector_mcp=FakeCatalogo().conector())
+    with TestClient(app) as client:
+        inicio = time.monotonic()
+        resp = client.post("/requisicoes", json={"pedido": PEDIDO})
+        assert time.monotonic() - inicio < 3  # interrompeu no prazo, não esperou o LLM
+        assert resp.status_code == 504
+        assert resp.json()["erro"] == "agente_timeout"
+        assert "nenhuma requisição foi gravada" in resp.json()["mensagem"]
+        assert client.get("/requisicoes").json() == []
+
+
+def test_timeout_alheio_ao_prazo_nao_vira_agente_timeout(settings):
+    class LLMQueEstoura(FakeLLM):
+        async def completar(self, messages, tools):
+            raise TimeoutError("timeout de outra origem")
+
+    app = create_app(settings, llm_factory=lambda _: LLMQueEstoura([]), conector_mcp=FakeCatalogo().conector())
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.post("/requisicoes", json={"pedido": PEDIDO})
+    assert resp.status_code == 500
+    assert resp.json()["erro"] == "erro_interno"
 
 
 def test_sem_chave_openrouter_retorna_503(settings):

@@ -8,6 +8,7 @@ GET  /health
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -19,7 +20,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
-from app import mcp_client
+from app import errors, mcp_client
 from app.agent import LLM, Catalogo, executar_agente
 from app.config import Settings
 from app.db import criar_engine, criar_sessionmaker, criar_tabelas
@@ -37,7 +38,7 @@ ERROS_DOCUMENTADOS = {
     422: {"model": Erro, "description": "Pedido inválido"},
     502: {"model": Erro, "description": "Falha no LLM / agente não concluiu"},
     503: {"model": Erro, "description": "Catálogo, MCP, LLM ou banco indisponível"},
-    504: {"model": Erro, "description": "Timeout do catálogo, MCP ou LLM"},
+    504: {"model": Erro, "description": "Timeout do catálogo, MCP, LLM ou prazo total do agente"},
 }
 
 
@@ -112,8 +113,17 @@ def create_app(
     )
     async def criar_requisicao(body: PedidoIn, request: Request, response: Response):
         llm = llm_factory(settings)
-        async with conector_mcp() as catalogo:
-            resultado = await executar_agente(body.pedido, llm, catalogo, settings.agent_max_steps)
+        # Prazo global do agente. A gravação fica FORA deste bloco: ou o agente terminou
+        # a tempo e a requisição é gravada, ou estourou o prazo e nada é gravado.
+        prazo = asyncio.timeout(settings.agent_timeout_seconds)
+        try:
+            async with prazo:
+                async with conector_mcp() as catalogo:
+                    resultado = await executar_agente(body.pedido, llm, catalogo, settings.agent_max_steps)
+        except TimeoutError as exc:
+            if not prazo.expired():
+                raise
+            raise errors.agente_timeout(settings.agent_timeout_seconds) from exc
 
         ferramentas = [ChamadaFerramentaOut(**vars(c)) for c in resultado.ferramentas]
         proposta = resultado.proposta

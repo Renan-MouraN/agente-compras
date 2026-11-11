@@ -31,6 +31,15 @@ def mcp_timeout() -> AppError:
     return AppError(504, "mcp_timeout", "O servidor de ferramentas (MCP) demorou demais para responder.")
 
 
+def agente_timeout(segundos: float) -> AppError:
+    return AppError(
+        504,
+        "agente_timeout",
+        f"O agente não concluiu o pedido em {segundos:g}s e nenhuma requisição foi gravada. "
+        "Tente novamente ou descreva o pedido de forma mais específica.",
+    )
+
+
 def catalogo(codigo: str, mensagem: str) -> AppError:
     """Falha da DummyJSON reportada por uma ferramenta MCP."""
     status = 504 if codigo == "catalogo_timeout" else 503
