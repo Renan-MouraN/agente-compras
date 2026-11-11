@@ -186,6 +186,11 @@ docker compose up -d mcp-server
 
 ## Diferenciais
 
+Dos quatro diferenciais opcionais do case, três foram implementados. A terceira ferramenta MCP
+(`criar_requisicao`) ficou de fora por decisão: ela moveria a gravação — o núcleo do requisito
+obrigatório — para o MCP, exigindo compartilhar as regras de validação e o acesso ao banco entre as duas
+peças. O raciocínio completo está em "Por que `concluir_pedido` é local", na seção de decisões.
+
 ### Ferramentas no chat
 
 Cada resposta do agente tem um bloco recolhível **"Ferramentas usadas (N)"**, com as chamadas na ordem em
@@ -213,8 +218,18 @@ docker compose exec backend python scripts/avaliar.py   # ou, do host: python3 b
 
 Em todos os casos o agente também precisa ter consultado o catálogo. A saída lista as checagens, as
 ferramentas chamadas e termina com "o agente acertou X de 5 pedidos". O código de saída é 0 só com 5 de 5.
-Os pedidos atendidos são gravados como requisições normais. A lógica de correção tem testes próprios, sem
-LLM ([backend/tests/test_avaliacao.py](backend/tests/test_avaliacao.py)).
+Os pedidos atendidos são gravados como requisições normais. Para avaliar sem tocar no banco em uso,
+suba uma cópia isolada (outro projeto compose, com volume e portas próprios) e remova-a ao final:
+
+```bash
+BACKEND_PUBLISHED_PORT=18000 MCP_PUBLISHED_PORT=18001 FRONTEND_PUBLISHED_PORT=13000 \
+  docker compose -p avaliacao up -d --build --wait
+docker compose -p avaliacao exec backend python scripts/avaliar.py
+docker compose -p avaliacao down -v
+```
+
+A lógica de correção tem testes próprios, sem LLM
+([backend/tests/test_avaliacao.py](backend/tests/test_avaliacao.py)).
 
 ### CI (GitHub Actions)
 
@@ -263,10 +278,13 @@ backend/scripts/avaliar.py    # avaliação com 5 pedidos de teste
 
 ## Uso de IA
 
-O desenvolvimento foi feito com o **Claude Code** (modelo Claude Opus 5.5) como par de programação. Eu
-defini a stack, a arquitetura e as regras (o modelo decide as ferramentas, nada de produtos ou preços
-inventados, validação antes de salvar) e pedi a implementação em etapas: estrutura e Docker, servidor
-MCP, agente e persistência, frontend. Cada etapa foi acompanhada de testes.
+O desenvolvimento foi feito com o **Claude Code** (modelos Claude Opus 5.5 e, na revisão final, Claude
+Fable 5) como par de programação. Eu defini a stack, a arquitetura e as regras (o modelo decide as
+ferramentas, nada de produtos ou preços inventados, validação antes de salvar) e pedi a implementação em
+etapas: estrutura e Docker, servidor MCP, agente e persistência, frontend; depois, uma auditoria contra os
+requisitos do case, correções de confiabilidade (prazos, retentativas, dependências fixadas) e os
+diferenciais. Cada etapa foi acompanhada de testes, e a validação no Docker foi feita por mim, com a IA
+interpretando os resultados.
 
 A IA escreveu grande parte do código e dos testes. Antes de escrever, ela inspecionou a API real do SDK
 MCP 2.x e os dados reais da DummyJSON. Também rodou o fluxo de ponta a ponta com a OpenRouter (pedido de
