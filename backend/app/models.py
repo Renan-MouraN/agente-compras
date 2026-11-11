@@ -45,7 +45,9 @@ class ItemRequisicao(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    requisicao_id: Mapped[int] = mapped_column(ForeignKey("requisicoes.id", ondelete="CASCADE"), nullable=False, index=True)
+    requisicao_id: Mapped[int] = mapped_column(
+        ForeignKey("requisicoes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     produto_id: Mapped[int] = mapped_column(nullable=False)
     titulo: Mapped[str] = mapped_column(String(255), nullable=False)
     categoria: Mapped[str | None] = mapped_column(String(100))

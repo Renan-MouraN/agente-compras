@@ -150,7 +150,8 @@ async def health(_: Request) -> JSONResponse:
 
 
 def main() -> None:
-    allowed_hosts = [h.strip() for h in os.getenv("MCP_ALLOWED_HOSTS", "localhost:*,127.0.0.1:*").split(",") if h.strip()]
+    hosts = os.getenv("MCP_ALLOWED_HOSTS", "localhost:*,127.0.0.1:*")
+    allowed_hosts = [h.strip() for h in hosts.split(",") if h.strip()]
     mcp.run(
         transport="streamable-http",
         host=os.getenv("MCP_HOST", "127.0.0.1"),

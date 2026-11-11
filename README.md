@@ -106,6 +106,7 @@ exibe a `mensagem`.
 | Servidor MCP inacessível / lento | 503 / 504 | `mcp_indisponivel` / `mcp_timeout` |
 | Chave OpenRouter ausente | 503 | `llm_nao_configurado` |
 | OpenRouter: chave inválida, sem créditos, rate limit, timeout | 502 / 504 | `llm_erro` / `llm_timeout` |
+| OpenRouter inacessível (DNS, conexão recusada ou caída) após 3 tentativas | 502 | `llm_indisponivel` |
 | Modelo não concluiu em `AGENT_MAX_STEPS` rodadas | 502 | `agente_sem_conclusao` |
 | Pedido inteiro passou de `AGENT_TIMEOUT_SECONDS` (nada é gravado) | 504 | `agente_timeout` |
 | Banco inacessível durante o pedido | 503 | `banco_indisponivel` |
@@ -126,6 +127,7 @@ modelo não faça perguntas, já que cada pedido é independente.
 **Outras escolhas:**
 - **Modelo padrão:** `anthropic/claude-haiku-5.5`, barato e bom em tool calling. Para trocar, defina `OPENROUTER_MODEL`. Usei `temperature: 0` para respostas mais estáveis.
 - **Cliente OpenRouter:** chamadas HTTP diretas, sem framework de agentes. O ciclo tem cerca de 100 linhas e é fácil de ler e testar.
+- **Instabilidade de rede com a OpenRouter:** falhas de *conexão* (DNS, recusa, conexão caída antes da resposta) são tentadas de novo até 3 vezes, com espera de 1 s e 2 s, e a causa vai para o log. Timeouts e erros HTTP (401, 402, 429) não são repetidos: repetir estouraria o prazo do agente ou não resolveria.
 - **MCP:** SDK oficial (`mcp` 2.3) com transporte streamable HTTP *stateless*, cada uma das quatro peças em seu próprio container. A proteção contra DNS rebinding fica ativa, com lista de hosts permitidos.
 - **Banco:** tabelas criadas com `create_all` no startup, como pede o case. Em produção eu usaria migrações (Alembic).
 - **Primeira subida do Postgres:** o healthcheck usa `pg_isready -h 127.0.0.1`, que força TCP. Na primeira inicialização do volume, a imagem sobe um servidor temporário só no socket Unix, e sem TCP o healthcheck marcaria "pronto" cedo demais. Além disso, o backend repete a criação das tabelas em erros transitórios ("the database system is starting up", conexão recusada, DNS) e falha na hora em erros permanentes (senha errada, banco inexistente), com mensagem no log.
@@ -150,7 +152,7 @@ docker compose run --rm --no-deps mcp-server pytest -v
 # retentativa do banco e erros de integração
 docker compose run --rm --no-deps backend pytest -v
 
-# Frontend: o cliente da API roda no build da imagem (npm test)
+# Frontend: cliente da API e exibição das ferramentas rodam no build da imagem (npm test)
 ```
 
 Sem Docker (Node 22+ e Python 3.12 ou superior; as imagens usam 3.12 e as suítes também foram executadas em 3.14):
@@ -160,8 +162,9 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r mcp_server/requirements-dev.txt -r backend/requirements-dev.txt
 (cd mcp_server && pytest)            # 10 testes
 (cd mcp_server && pytest -m live)    # opcional: contra a DummyJSON real
-(cd backend && pytest)               # 61 testes (8 deles sobem o servidor MCP real)
-(cd frontend && npm ci && npm test)  # 5 testes
+(cd backend && pytest)               # 81 testes (8 deles sobem o servidor MCP real)
+(cd frontend && npm ci && npm test)  # 8 testes
+ruff check . && (cd frontend && npm run lint)   # lint, como no CI (pip install ruff==0.17.4)
 ```
 
 O **teste de contrato** ([backend/tests/test_contrato_mcp.py](backend/tests/test_contrato_mcp.py)) sobe o
@@ -181,6 +184,54 @@ docker compose stop mcp-server
 docker compose up -d mcp-server
 ```
 
+## Diferenciais
+
+### Ferramentas no chat
+
+Cada resposta do agente tem um bloco recolhível **"Ferramentas usadas (N)"**, com as chamadas na ordem em
+que o modelo as fez: `buscar_produtos "laptop"`, `detalhar_produto produto #80`, `concluir_pedido 1 item`.
+As chamadas que falharam aparecem com ✗ e o motivo, por exemplo "proposta rejeitada pela validação; o
+agente corrigiu". O backend já devolvia esse rastro no campo `ferramentas` da resposta. A mudança foi só no
+chat ([frontend/src/ferramentas.js](frontend/src/ferramentas.js)).
+
+### Script de avaliação (5 pedidos)
+
+[backend/scripts/avaliar.py](backend/scripts/avaliar.py) envia 5 pedidos à API em execução, com LLM, MCP e
+DummyJSON reais, e mostra quantos o agente acertou:
+
+```bash
+docker compose exec backend python scripts/avaliar.py   # ou, do host: python3 backend/scripts/avaliar.py
+```
+
+| # | Pedido | Acerto significa |
+|---|---|---|
+| 1 | 3 laptops até US$ 2.000 cada | requisição só com laptops, 3 unidades, preço unitário ≤ 2000 |
+| 2 | 2 smartphones, orçamento total de US$ 1.000 | só smartphones, 2 unidades, total ≤ 1000 |
+| 3 | 10 laptops até US$ 500 cada | **nenhuma** requisição (o laptop mais barato custa 1099,99) e uma explicação |
+| 4 | 10 perfumes Dior J'adore | produto #8, 10 unidades, total exato de US$ 899,90 (preço vindo do catálogo) |
+| 5 | 5 tratores agrícolas | **nenhuma** requisição (não há no catálogo) e nenhuma substituição |
+
+Em todos os casos o agente também precisa ter consultado o catálogo. A saída lista as checagens, as
+ferramentas chamadas e termina com "o agente acertou X de 5 pedidos". O código de saída é 0 só com 5 de 5.
+Os pedidos atendidos são gravados como requisições normais. A lógica de correção tem testes próprios, sem
+LLM ([backend/tests/test_avaliacao.py](backend/tests/test_avaliacao.py)).
+
+### CI (GitHub Actions)
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) roda em cada push na `main` e em pull requests, sem
+precisar da chave da OpenRouter:
+
+| Job | O que faz |
+|---|---|
+| Lint | `ruff check` no Python ([ruff.toml](ruff.toml)) e ESLint no chat ([frontend/eslint.config.js](frontend/eslint.config.js)) |
+| Servidor MCP | `pytest` |
+| Backend | `pytest`, incluindo o teste de contrato com o servidor MCP real |
+| Chat | `npm test` e `npm run build` |
+| docker compose | `config`, `up --build --wait` (healthchecks), `/health`, `GET /api/requisicoes` pelo nginx (prova que as tabelas foram criadas) e os testes dentro dos containers |
+
+O `npm audit` aponta 4 alertas moderados, todos no ESLint, que só existe em desenvolvimento (`minimatch`,
+ReDoS em padrões de glob). O código de produção tem 0 vulnerabilidades (`npm audit --omit=dev`).
+
 ## Estrutura
 
 ```
@@ -197,6 +248,9 @@ backend/app/models.py         # tabelas requisicoes / itens_requisicao
 backend/app/db.py             # engine, criação das tabelas e retentativa no startup
 frontend/src/App.jsx          # chat
 frontend/src/api.js           # cliente HTTP com mensagens de erro
+frontend/src/ferramentas.js   # rastro de ferramentas exibido no chat
+backend/scripts/avaliar.py    # avaliação com 5 pedidos de teste
+.github/workflows/ci.yml      # CI: lint, testes e docker compose up
 ```
 
 ## Segurança

@@ -303,3 +303,26 @@ h2 {
     width: 100%;
   }
 }
+
+.ferramentas {
+  margin-top: 10px;
+  font-size: 0.85rem;
+  color: var(--suave);
+}
+
+.ferramentas summary {
+  cursor: pointer;
+}
+
+.ferramentas ol {
+  margin: 6px 0 0;
+  padding-left: 22px;
+}
+
+.ferramentas li.ok > span:first-child {
+  color: var(--ok);
+}
+
+.ferramentas li.falha > span:first-child {
+  color: var(--erro);
+}

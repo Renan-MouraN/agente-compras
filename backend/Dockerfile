@@ -14,6 +14,7 @@ RUN pip install -r requirements-dev.txt
 COPY pyproject.toml ./
 COPY app ./app
 COPY tests ./tests
+COPY scripts ./scripts
 
 RUN useradd --create-home --uid 10001 appuser
 USER appuser

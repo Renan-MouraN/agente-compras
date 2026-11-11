@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { enviarPedido, formatarDinheiro, listarRequisicoes } from './api.js'
+import { descreverFerramentas } from './ferramentas.js'
 
 const EXEMPLOS = [
   'Preciso de 3 laptops para o time de vendas, até US$ 2.000 cada.',
@@ -46,8 +47,27 @@ function TabelaItens({ requisicao }) {
   )
 }
 
+function FerramentasUsadas({ ferramentas }) {
+  const linhas = descreverFerramentas(ferramentas)
+  if (linhas.length === 0) return null
+  return (
+    <details className="ferramentas">
+      <summary>Ferramentas usadas ({linhas.length})</summary>
+      <ol>
+        {linhas.map((l, i) => (
+          <li key={i} className={l.sucesso ? 'ok' : 'falha'}>
+            <span aria-hidden="true">{l.sucesso ? '✓' : '✗'}</span> <code>{l.ferramenta}</code>
+            {l.detalhe && <span className="meta"> {l.detalhe}</span>}
+            {l.erro && <span className="meta"> ({l.erro})</span>}
+          </li>
+        ))}
+      </ol>
+    </details>
+  )
+}
+
 function RespostaAgente({ resposta }) {
-  const { status, mensagem, pendencias, requisicao } = resposta
+  const { status, mensagem, pendencias, requisicao, ferramentas } = resposta
   return (
     <div className="bolha agente">
       {status === 'criada' && requisicao && (
@@ -64,6 +84,7 @@ function RespostaAgente({ resposta }) {
           <strong>O que não foi atendido:</strong> {pendencias}
         </div>
       )}
+      <FerramentasUsadas ferramentas={ferramentas} />
     </div>
   )
 }
@@ -84,8 +105,8 @@ function Historico({ atualizarEm }) {
   const [estado, setEstado] = useState({ carregando: true, erro: null, itens: [] })
 
   useEffect(() => {
+    // Sem setState síncrono aqui: a lista atual fica na tela até a nova chegar.
     let ativo = true
-    setEstado((s) => ({ ...s, carregando: true, erro: null }))
     listarRequisicoes()
       .then((itens) => ativo && setEstado({ carregando: false, erro: null, itens }))
       .catch((e) => ativo && setEstado({ carregando: false, erro: e.message, itens: [] }))

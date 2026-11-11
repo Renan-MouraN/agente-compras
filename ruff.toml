@@ -1,0 +1,18 @@
+# Lint Python (backend e servidor MCP). Rodado no CI: ruff check .
+target-version = "py312"
+line-length = 120
+extend-exclude = [".venv", "frontend"]
+
+[lint]
+# E/W: estilo PEP 8 · F: erros reais (nomes indefinidos, imports não usados)
+# I: ordem de imports · B: armadilhas comuns · UP: sintaxe moderna · ASYNC: bloqueios em código async
+select = ["E", "W", "F", "I", "B", "UP", "ASYNC"]
+# conectar(url, timeout) repassa o timeout ao SDK MCP e a cada chamada; não é um cancelamento ad hoc.
+ignore = ["ASYNC109"]
+
+[lint.isort]
+known-first-party = ["app", "tests", "scripts"]
+
+[lint.per-file-ignores]
+# Testes: dados de catálogo em linhas longas facilitam a leitura.
+"*/tests/*" = ["E501"]

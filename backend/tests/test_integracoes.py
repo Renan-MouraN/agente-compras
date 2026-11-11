@@ -60,6 +60,57 @@ async def test_llm_erro_no_corpo_com_status_200(llm):
     assert "provider down" in exc.value.mensagem
 
 
+@pytest.fixture
+def llm_sem_espera():
+    return OpenRouterLLM(
+        dataclasses.replace(
+            Settings.from_env(), openrouter_api_key="k", openrouter_base_url="https://openrouter.test/api/v1",
+            openrouter_timeout_seconds=1,
+        ),
+        espera=0,
+    )
+
+
+@respx.mock
+async def test_llm_tenta_de_novo_apos_falha_de_conexao_passageira(llm_sem_espera):
+    ok = httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "oi"}}]})
+    route = respx.post(URL).mock(side_effect=[
+        httpx.ConnectError("[Errno -3] Temporary failure in name resolution"),
+        httpx.RemoteProtocolError("Server disconnected without sending a response."),
+        ok,
+    ])
+    msg = await llm_sem_espera.completar([], [])
+    assert msg["content"] == "oi"
+    assert route.call_count == 3
+
+
+@respx.mock
+async def test_llm_desiste_apos_tres_falhas_de_conexao_e_registra_a_causa(llm_sem_espera, caplog):
+    route = respx.post(URL).mock(side_effect=httpx.ConnectError("[Errno 111] Connection refused"))
+    with pytest.raises(AppError) as exc:
+        await llm_sem_espera.completar([], [])
+    assert exc.value.codigo == "llm_indisponivel" and exc.value.status_code == 502
+    assert "após 3 tentativas" in exc.value.mensagem
+    assert route.call_count == 3
+    assert "ConnectError: [Errno 111] Connection refused" in caplog.text
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "falha",
+    [httpx.ReadTimeout("lento"), httpx.Response(429, json={}), httpx.Response(401, json={})],
+    ids=["timeout", "429", "401"],
+)
+async def test_llm_nao_repete_timeout_nem_erro_http(llm_sem_espera, falha):
+    if isinstance(falha, Exception):
+        route = respx.post(URL).mock(side_effect=falha)
+    else:
+        route = respx.post(URL).mock(return_value=falha)
+    with pytest.raises(AppError):
+        await llm_sem_espera.completar([], [])
+    assert route.call_count == 1
+
+
 def _porta_livre() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))

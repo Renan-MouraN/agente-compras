@@ -192,7 +192,9 @@ async def executar_agente(pedido: str, llm: LLM, catalogo_mcp: Catalogo, max_ste
                     raise ValueError
             except ValueError:
                 trace.append(ChamadaFerramenta(nome, bruto, False, "argumentos_invalidos"))
-                conteudo = _json({"erro": "argumentos_invalidos", "mensagem": "Os argumentos devem ser um objeto JSON."})
+                conteudo = _json(
+                    {"erro": "argumentos_invalidos", "mensagem": "Os argumentos devem ser um objeto JSON."}
+                )
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": conteudo})
                 continue
 

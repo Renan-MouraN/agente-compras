@@ -1,0 +1,129 @@
+# CI: lint + testes de cada peça + subida real do docker compose.
+# Nenhum job precisa da chave da OpenRouter: o LLM é roteirizado nos testes e,
+# no job do compose, só se verifica que tudo sobe, cria as tabelas e responde.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12" # mesma versão das imagens Docker
+  NODE_VERSION: "22"
+
+jobs:
+  lint:
+    name: Lint (ruff + ESLint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: ruff (backend e servidor MCP)
+        run: |
+          pip install ruff==0.17.4
+          ruff check --output-format=github .
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: ESLint (chat)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+
+  mcp-server:
+    name: Testes do servidor MCP
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: mcp_server
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: mcp_server/requirements*.txt
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -v
+
+  backend:
+    name: Testes do backend (inclui contrato com o MCP real)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: "*/requirements*.txt"
+      # As dependências do MCP entram no mesmo ambiente porque os testes de contrato
+      # sobem o servidor MCP de verdade (subprocesso). As versões fixadas são compatíveis.
+      - run: pip install -r backend/requirements-dev.txt -r mcp_server/requirements-dev.txt
+      - name: pytest
+        working-directory: backend
+        run: pytest -v -rs
+
+  frontend:
+    name: Testes e build do chat
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  compose:
+    name: docker compose up (integração)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [mcp-server, backend, frontend]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validar o compose
+        run: docker compose config --quiet
+      - name: Subir o stack e esperar os healthchecks
+        # Sem .env: só a chave da OpenRouter é obrigatória para o chat, não para subir.
+        run: docker compose up --build --detach --wait --wait-timeout 300
+      - name: Verificar backend, tabelas e proxy do chat
+        run: |
+          curl -fsS http://localhost:8000/health
+          curl -fsS http://localhost:8001/health
+          # GET pelo nginx do chat -> backend -> Postgres: prova que as tabelas foram criadas.
+          test "$(curl -fsS http://localhost:3000/api/requisicoes)" = "[]"
+          curl -fsS http://localhost:3000/ | grep -q '<div id="root">'
+      - name: Testes dentro dos containers
+        run: |
+          docker compose run --rm --no-deps mcp-server pytest -q
+          docker compose run --rm --no-deps backend pytest -q
+      - name: Logs (em caso de falha)
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Derrubar
+        if: always()
+        run: docker compose down -v
