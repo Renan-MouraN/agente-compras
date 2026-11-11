@@ -12,16 +12,47 @@ A pessoa descreve o que precisa num chat. Um agente (LLM via OpenRouter) consult
 
 ## Como rodar
 
-Pré-requisito: Docker com Docker Compose v2.
+Pré-requisito: Docker com Docker Compose v2 (confira com `docker compose version`).
+
+**1. Extraia o zip e entre na pasta** (ela já vem com o histórico Git):
 
 ```bash
-cp .env.example .env          # preencha OPENROUTER_API_KEY
-docker compose up --build     # na primeira vez, `docker compose up` também faz o build
+unzip agente-compras.zip
+cd agente-compras
 ```
 
-Os quatro serviços sobem em ordem, guiados por healthchecks: `postgres` e `mcp-server` ficam `healthy`,
-depois sobe o `backend` (`healthy`) e então o `frontend`. Confira com `docker compose ps`. Para recomeçar
-do zero, apagando o banco: `docker compose down -v`.
+**2. Crie o `.env` e preencha a chave da OpenRouter:**
+
+```bash
+cp .env.example .env
+```
+
+Abra o `.env` num editor e preencha a linha `OPENROUTER_API_KEY=`. É a única variável obrigatória;
+todas as outras têm valor padrão.
+
+**3. Suba as quatro peças:**
+
+```bash
+docker compose up --build
+```
+
+Na primeira vez, isso baixa as imagens e faz o build (alguns minutos). Os serviços sobem em ordem,
+guiados por healthchecks: `postgres` e `mcp-server` ficam `healthy`, depois o `backend` e então o
+`frontend`. Está pronto quando `docker compose ps` (em outro terminal) mostrar os quatro de pé. As
+tabelas do banco são criadas automaticamente nessa subida.
+
+**4. Abra o chat em http://localhost:3000 e envie o pedido de exemplo:**
+
+> Preciso de 3 laptops para o time de vendas, até US$ 2.000 cada.
+
+Ele também aparece como botão na tela inicial do chat. A resposta mostra o número da requisição
+(ex.: `REQ-000001`), os itens escolhidos, quantidades, preços, o valor total e o bloco
+"Ferramentas usadas", com as chamadas que o agente fez.
+
+**5. Veja as requisições salvas** no painel lateral do chat, em http://localhost:8000/requisicoes
+ou pelo Swagger em http://localhost:8000/docs.
+
+---
 
 | Serviço | URL |
 |---|---|
@@ -29,13 +60,15 @@ do zero, apagando o banco: `docker compose down -v`.
 | API + Swagger | http://localhost:8000/docs |
 | Servidor MCP (streamable HTTP) | http://localhost:8001/mcp |
 
-As tabelas são criadas automaticamente quando o backend sobe. Para testar sem o navegador:
+Para testar sem o navegador:
 
 ```bash
 curl -s -X POST localhost:8000/requisicoes -H 'Content-Type: application/json' \
   -d '{"pedido": "Preciso de 3 laptops para o time de vendas, até US$ 2.000 cada."}'
 curl -s localhost:8000/requisicoes
 ```
+
+Para recomeçar do zero, apagando o banco: `docker compose down -v`.
 
 Exemplo de resposta (resumida):
 
