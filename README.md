@@ -12,25 +12,56 @@ A pessoa descreve o que precisa num chat. Um agente (LLM via OpenRouter) consult
 
 ## Como rodar
 
-Pré-requisito: Docker com Docker Compose v2 (confira com `docker compose version`).
+Pré-requisito: Docker com Docker Compose v2 instalado e rodando (confira num terminal com
+`docker compose version`). Todos os comandos abaixo são digitados **num terminal, dentro da pasta do
+projeto**.
 
-**1. Extraia o zip e entre na pasta** (ela já vem com o histórico Git):
+**1. Extraia o zip e abra um terminal na pasta extraída:**
 
 ```bash
 unzip agente-compras.zip
 cd agente-compras
 ```
 
-**2. Crie o `.env` e preencha a chave da OpenRouter:**
+Se preferir, extraia pelo gerenciador de arquivos e abra a pasta `agente-compras` no VS Code
+(File → Open Folder) — o terminal integrado (`` Ctrl+` ``) já abre no lugar certo. A pasta vem com o
+histórico Git (`.git`).
+
+**2. Coloque a chave da OpenRouter no arquivo `.env`.** Em quatro sub-passos:
+
+**2a.** No terminal, copie o arquivo de modelo (isso cria o arquivo `.env` na pasta do projeto —
+ele nasce **sem** a chave; os passos seguintes a colocam lá):
 
 ```bash
 cp .env.example .env
 ```
 
-Abra o `.env` num editor e preencha a linha `OPENROUTER_API_KEY=`. É a única variável obrigatória;
-todas as outras têm valor padrão.
+**2b.** Abra o arquivo `.env` num editor de texto. Pelo VS Code, digite no terminal:
 
-**3. Suba as quatro peças:**
+```bash
+code .env
+```
+
+(Alternativas: `nano .env` no próprio terminal, ou abrir a pasta do projeto no VS Code e clicar no
+arquivo `.env` na lista à esquerda. Nos gerenciadores de arquivos ele pode ficar invisível, porque
+nomes que começam com ponto são ocultos — pelo editor ele sempre aparece.)
+
+**2c.** Dentro do arquivo, localize a linha que termina com um `=` sem nada depois:
+
+```
+OPENROUTER_API_KEY=
+```
+
+**2d.** Cole a sua chave da OpenRouter (o código que começa com `sk-or-v1-`) imediatamente depois
+do `=`, sem espaço e sem aspas, e salve o arquivo (Ctrl+S). A linha fica assim:
+
+```
+OPENROUTER_API_KEY=sk-or-v1-SUA-CHAVE-AQUI
+```
+
+É a única variável obrigatória; todas as outras têm valor padrão.
+
+**3. De volta ao terminal, suba as quatro peças:**
 
 ```bash
 docker compose up --build
@@ -38,19 +69,22 @@ docker compose up --build
 
 Na primeira vez, isso baixa as imagens e faz o build (alguns minutos). Os serviços sobem em ordem,
 guiados por healthchecks: `postgres` e `mcp-server` ficam `healthy`, depois o `backend` e então o
-`frontend`. Está pronto quando `docker compose ps` (em outro terminal) mostrar os quatro de pé. As
-tabelas do banco são criadas automaticamente nessa subida.
+`frontend`. Está pronto quando os logs se acalmarem e `docker compose ps`, rodado **num segundo
+terminal**, mostrar os quatro serviços de pé. As tabelas do banco são criadas automaticamente nessa
+subida — não há nenhum passo manual de banco.
 
-**4. Abra o chat em http://localhost:3000 e envie o pedido de exemplo:**
+**4. Abra o navegador em http://localhost:3000 e envie o pedido de exemplo no chat:**
 
 > Preciso de 3 laptops para o time de vendas, até US$ 2.000 cada.
 
-Ele também aparece como botão na tela inicial do chat. A resposta mostra o número da requisição
+Digite-o na caixa de texto e pressione Enter — ou simplesmente clique nesse pedido, que aparece como
+botão na tela inicial do chat. A resposta mostra o número da requisição
 (ex.: `REQ-000001`), os itens escolhidos, quantidades, preços, o valor total e o bloco
 "Ferramentas usadas", com as chamadas que o agente fez.
 
-**5. Veja as requisições salvas** no painel lateral do chat, em http://localhost:8000/requisicoes
-ou pelo Swagger em http://localhost:8000/docs.
+**5. Veja as requisições salvas:** elas aparecem no painel "Requisições salvas", à direita do chat.
+Também dá para vê-las abrindo http://localhost:8000/requisicoes no navegador (JSON direto) ou pelo
+Swagger em http://localhost:8000/docs.
 
 ---
 
